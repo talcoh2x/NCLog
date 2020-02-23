@@ -1,0 +1,2 @@
+# NCLog
+system logs collecting
