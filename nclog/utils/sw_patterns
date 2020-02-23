@@ -1,0 +1,59 @@
+COMPONENT
+RUNTIME:
+Runtime message
+
+COMPONENT
+:+ InfApi+
+Inference_api message
+
+COMPONENT
+CVE driver API call
+ICEDriver call
+
+BUG
+ACPI Error:+
+BIOS tables error
+
+BUG
+Error:
+Error
+
+BUG
+ERROR, \[ERROR\]
+Error
+
+BUG
+.*Update counter failed.*
+SW counters updated failure
+
+BUG
+context_id .* did not close properly
+Context didn't close properly
+
+BUG
+:+ \[ERROR_LOG\].*failed.*
+SW component error???
+
+BUG
+: \[ERROR_LOG\]+ No device available.
+No device available
+
+BUG
+.*Queue Empty = 1.*
+Empty queue
+
+BUG
+.*WD Error =1.*
+Watchdog error
+
+BUG
+.*FW base package loading.*
+Couldn't load any firmware
+
+BUG
+.*handle_daemon_error: got daemon error 129 val=0.*
+No runtime
+
+BUG
+.*Failed to start sph_runtime, errno=2 (No such file or directory).*
+No runtime

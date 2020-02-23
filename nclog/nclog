@@ -1,0 +1,179 @@
+#!/usr/bin/python
+
+"""
+    ***********************************************************************************************
+    * INTEL CORPORATION CONFIDENTIAL Copyright(c) 2017-2019 Intel Corporation. All Rights Reserved.
+    *
+    * The source code contained or described herein and all documents related to the
+    * source code ("Material") are owned by Intel Corporation or its suppliers or
+    * licensors. Title to the Material remains with Intel Corporation or its suppliers
+    * and licensors. The Material contains trade secrets and proprietary and
+    * confidential information of Intel or its suppliers and licensors. The Material
+    * is protected by worldwide copyright and trade secret laws and treaty provisions.
+    * No part of the Material may be used, copied, reproduced, modified, published,
+    * uploaded, posted, transmitted, distributed, or disclosed in any way without
+    * Intel's prior express written permission.
+    *
+    * No license under any patent, copyright, trade secret or other intellectual
+    * property right is granted to or conferred upon you by disclosure or delivery of
+    * the Materials, either expressly, by implication, inducement, estoppel or
+    * otherwise. Any license under such intellectual property rights must be express
+    * and approved by Intel in writing.
+     **********************************************************************************************
+"""
+__version__ = '1.0'
+
+import os
+import time
+import json
+import logging
+import argparse
+# SRC
+from src import logs_parsing
+from src import nnpi_info
+from src import sysinfo
+
+from src.deamon import ICEDaemon
+from os.path import expanduser
+from enum import Enum
+
+
+PIDFILE = '/tmp/nclogdaemon.pid'
+LOGFILE = '/tmp/nclogdaemon.log'
+SYSINFO_DIR = os.path.join('{}'.format(expanduser("~")), 'nclog')
+DAEMON_DATA = "{}/daemon_data.json".format(SYSINFO_DIR)
+# TODO: Will change later to Cpickle ( Serialize / Deserialize ).
+
+base_sysinfo = sysinfo.sysinfo(SYSINFO_DIR)
+base_nnpiinfo = nnpi_info.CollectNNPIInfo()
+realtime_info = nnpi_info.CollectRealTimeInfo()
+
+logging.basicConfig(filename=LOGFILE, filemode='a',
+                    format='%(asctime)s [%(levelname)s] %(module)s: %(message)s', datefmt='%Y/%d/%m %H:%M:%S',
+                    level=logging.DEBUG)
+logger = logging.getLogger('NCLogDaemon')
+
+
+class TASK(Enum):
+    START = 'start'
+    STOP = 'stop'
+    RESTART = 'restart'
+    STATUS = 'status'
+
+    def __str__(self):
+        return str(self.value).lower()
+
+
+class NCLog(ICEDaemon):
+    """
+
+    """
+    # TODO: Will change later to Cpickle ( Serialize / Deserialize ).
+    def _sysinfo(self):
+        base_sysinfo.log_before()
+        base_nnpiinfo.pre_test()
+        data = {}
+        data['log_messages'] = []
+        data['log_messages'].append({
+            '_messages_size': base_sysinfo._messages_size,
+            '_messages_inode': base_sysinfo._messages_inode,
+            '_test_stime': base_nnpiinfo._start_time,
+            '_test_name': base_nnpiinfo._test_name,
+            '_test_maindir': base_nnpiinfo._test_output_dir
+        })
+        return data
+
+    def run(self):
+        # Define your tasks here
+        # WA create global_config.ini for icetest
+        try:
+            os.mknod(DAEMON_DATA)
+        except Exception:
+            pass
+        # Logging errors and exceptions
+        try:
+            data = self._sysinfo()
+            with open(DAEMON_DATA, 'w') as outfile:
+                json.dump(data, outfile)
+        except Exception as e:
+            logger.exception('Daemon failed: {}'.format(e))
+
+        while True:
+            # The daemon will repeat your tasks according to this variable
+            # it's in second so 60 is 1 minute, 3600 is 1 hour, etc.
+            if realtime_info.activate:
+                realtime_info.collect_all_logs()
+            time.sleep(1)
+
+
+# TODO: Will change later to Cpickle ( Serialize / Deserialize ).
+def _sysinfo(do_parsing):
+    with open(DAEMON_DATA) as json_file:
+        data = json.load(json_file)
+        for tmp in data['log_messages']:
+            base_sysinfo._messages_size = tmp['_messages_size']
+            base_sysinfo._messages_inode = tmp['_messages_inode']
+            base_nnpiinfo._start_time = tmp['_test_stime']
+            base_nnpiinfo._test_name = tmp['_test_name']
+            base_nnpiinfo._test_output_dir = tmp['_test_maindir']
+            base_sysinfo.log_after(SYSINFO_DIR)
+            base_nnpiinfo.collect_all()
+            if do_parsing:
+                logs_parser = logs_parsing.Parser(tmp['_test_name'], SYSINFO_DIR)
+                logs_parser.parse_all_logs()
+
+
+if __name__ == "__main__":
+
+    parser = argparse.ArgumentParser(description='NCLog Service API')
+    subparsers = parser.add_subparsers(title='service selection', dest='service')
+    parser.add_argument('-v', '--version', action='version', version='%(prog)s {version}'.format(version=__version__))
+    # Daemon Start
+    parser_start = subparsers.add_parser("start", help="start")
+    parser_start.add_argument("-realtime", action='store_true', help="collect logs in realtime")
+    parser_start.add_argument("-systest", action='store', help="systest", default='test')
+    parser_start.add_argument("-nnpi_ctl", action='store_true', help="nnpi_ctl")
+    # Daemon Stop
+    parser_stop = subparsers.add_parser("stop", help="stop")
+    parser_stop.add_argument("-analyze_logs", action='store_true', help="analyze collected logs")
+    # Restart
+    parser_restart = subparsers.add_parser("restart", help="restart")
+    # Status
+    parser_status = subparsers.add_parser("status", help="status")
+
+    args, _ = parser.parse_known_args()
+    task = args.service
+    # Init Daemon
+    daemon = NCLog(PIDFILE)
+
+    if task == str(TASK.START):
+        try:
+            if args.realtime:
+                realtime_info.activate = True
+            daemon.start()
+        except:
+            pass
+    if task == str(TASK.STOP):
+        logger.info("Stopping ...")
+        pid = daemon.get_pid()
+        daemon.stop()
+        if pid:
+            _sysinfo(args.analyze_logs)
+
+    if task == str(TASK.RESTART):
+        logger.info("Restaring ...")
+        daemon.restart_daemon()
+    if task == str(TASK.STATUS):
+        try:
+            pf = file(PIDFILE, 'r')
+            pid = int(pf.read().strip())
+            pf.close()
+        except IOError:
+            pid = None
+        except SystemExit:
+            pid = None
+
+        if pid:
+            logger.info('YourDaemon is running as pid %s' % pid)
+        else:
+            logger.info('YourDaemon is not running.')
